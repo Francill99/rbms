@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from rbms.bernoulli_bernoulli.implement import (
+from rbms.ising.implement import (
     _compute_energy,
     _compute_energy_hiddens,
     _compute_energy_visibles,
@@ -17,7 +17,7 @@ from rbms.bernoulli_bernoulli.implement import (
 from rbms.classes import RBM
 
 
-class BBRBM(RBM):
+class IsingRBM(RBM):
     """Parameters of the Bernoulli-Bernoulli RBM"""
 
     def __init__(
@@ -55,17 +55,17 @@ class BBRBM(RBM):
         self.K1 = K1.to(device=self.device, dtype=self.dtype)
         self.K2 = K2.to(device=self.device, dtype=self.dtype)
         self.K2_norm_0 = torch.norm(K2)
-        self.name = "BBRBM"
+        self.name = "IsingRBM"
 
     def __add__(self, other):
-        return BBRBM(
+        return IsingRBM(
             weight_matrix=self.weight_matrix + other.weight_matrix,
             vbias=self.vbias + other.vbias,
             hbias=self.hbias + other.hbias,
         )
 
     def __mul__(self, other):
-        return BBRBM(
+        return IsingRBM(
             weight_matrix=self.weight_matrix * other,
             vbias=self.vbias * other,
             hbias=self.hbias * other,
@@ -78,7 +78,7 @@ class BBRBM(RBM):
             device = self.device
         if dtype is None:
             dtype = self.dtype
-        return BBRBM(
+        return IsingRBM(
             weight_matrix=self.weight_matrix.clone(),
             vbias=self.vbias.clone(),
             hbias=self.hbias.clone(),
@@ -122,11 +122,11 @@ class BBRBM(RBM):
             vbias=self.vbias,
             hbias=self.hbias,
             weight_matrix=self.weight_matrix,
-            centered=centered,
+            centered=False
         )
 
     def independent_model(self):
-        return BBRBM(
+        return IsingRBM(
             weight_matrix=torch.zeros_like(self.weight_matrix),
             vbias=self.vbias,
             hbias=torch.zeros_like(self.hbias),
@@ -163,13 +163,13 @@ class BBRBM(RBM):
             device=device,
             dtype=dtype,
             var_init=var_init,
-            beta=beta,
+            beta=beta
         )
         num_visible = len(data[0,:])
         K1 = torch.randn_like(weight_matrix, device=device, dtype=dtype)/np.sqrt(float(num_hiddens))
         K2 = torch.randn_like(weight_matrix, device=device, dtype=dtype)/np.sqrt(float(num_hiddens))
 
-        return BBRBM(weight_matrix=weight_matrix, vbias=vbias, hbias=hbias, K1=K1, K2=K2)
+        return IsingRBM(weight_matrix=weight_matrix, vbias=vbias, hbias=hbias, K1=K1, K2=K2)
 
     def named_parameters(self):
         return {
@@ -187,7 +187,7 @@ class BBRBM(RBM):
         return self.vbias.shape[0]
 
     def parameters(self) -> List[Tensor]:
-        return [self.weight_matrix, self.vbias, self.hbias]
+        return [self.weight_matrix, self.vbias, self.hbias, self.K1, self.K2]
 
     def ref_log_z(self):
         return (
@@ -214,13 +214,13 @@ class BBRBM(RBM):
 
     @staticmethod
     def set_named_parameters(named_params: dict[str, Tensor]) -> Self:
-        names = ["vbias", "hbias", "weight_matrix"]
+        names = ["vbias", "hbias", "weight_matrix", "K1", "K2"]
         for k in names:
             if k not in named_params.keys():
                 raise ValueError(
                     f"""Dictionary params missing key '{k}'\n Provided keys : {named_params.keys()}\n Expected keys: {names}"""
                 )
-        params = BBRBM(
+        params = IsingRBM(
             weight_matrix=named_params.pop("weight_matrix"),
             vbias=named_params.pop("vbias"),
             hbias=named_params.pop("hbias"),
@@ -247,58 +247,64 @@ class BBRBM(RBM):
         self.K2 = self.K2.to(device=self.device, dtype=self.dtype)
         return self
     
-    
-    # ───────────────────────── 1st-order PL (single visible site) ─────────────────────────
     def compute_loss_PL1(self, data, l, use_fields=True, use_hfield=True):
-        x = data                                            # [M,N] entries ∈{0,1}
-    
-        # mean-field hidden expectation  ⟨h_a⟩ ≃ tanh(λ⋅pre)
-        h_pre = torch.einsum("ia,mi->ma", self.K1, x)       # Wᵀx
-        if use_hfield:
-            h_pre = h_pre + self.hbias
-        h = torch.tanh(l * h_pre)                           # ±1 hidden → tanh
-    
-        F = torch.einsum("ja,ma->mj", self.K1, h)           # local field on each visible
+        x = data  # [M, N]
+
+        with torch.no_grad():                                                
+            h_pre = torch.einsum("ia,mi->ma", self.K1, x)                    
+            if use_hfield:                                                   
+                h_pre = h_pre + self.hbias
+            h = torch.tanh(l * h_pre)                                        
+
+        F = torch.einsum("ja,ma->mj", self.K1, h)                            
         if use_fields:
-            F = F + self.vbias
-    
-        logZ = F.softplus(l * F) if hasattr(F, "softplus") else F           # F.softplus → log(1+e^{λF})
-        e_i  = -x * F + (1. / l) * logZ                    # −log P(x_i|rest)/λ
-        return e_i.mean()
-    
-    
-    # ───────────────────────── 2nd-order PL (visible–hidden pair) ─────────────────────────
-    def compute_loss_PL2(self, data, l, use_fields=True, use_hfield=True):
-        x = data                                            # [M,N]
-        # hidden mean-field
-        h_pre = torch.einsum("ia,mi->ma", self.K2, x)
-        if use_fields and use_hfield:
-            h_pre = h_pre + self.hbias
-        h = torch.tanh(l * h_pre)                           # [M,A]
-    
-        # leave-one-out effective fields
-        b = torch.einsum("ja,ma->mj", self.K2, h)           # vis-field from h
-        c = torch.einsum("ja,mj->ma", self.K2, x)           # hid-field from x
-        if use_fields:
-            b = b + self.vbias
-            if use_hfield:
-                c = c + self.hbias
-    
-        j_term = torch.einsum("ja,ma->mja", self.K2, h)     # W_ja h_a
-        a_term = torch.einsum("ja,mj->mja", self.K2, x)     # W_ja x_j
-        b_i_eff = b.unsqueeze(2) - j_term                   # b̂_j|¬a      [M,N,1]
-        c_a_eff = c.unsqueeze(1) - a_term                   # ĉ_a|¬j      [M,1,A]
-    
-        # observed energy   E_obs = −(W_ja x_j h_a + b̂_j x_j + ĉ_a h_a)
-        w_ai = torch.einsum("ma,ja,mj->mja", h, self.K2, x) # W_ja x_j h_a
-        h_ai = b_i_eff * x.unsqueeze(2) + c_a_eff * h.unsqueeze(1)
-    
-        # partition Z_{ja} over x_j∈{0,1}, h_a∈{±1}
-        z0 = torch.exp(-l * c_a_eff)                                      # (x=0,h=-1)
-        z1 = torch.exp( l * c_a_eff)                                      # (x=0,h=+1)
-        z2 = torch.exp( l * (b_i_eff - self.K2 - c_a_eff))                # (x=1,h=-1)
-        z3 = torch.exp( l * (b_i_eff + self.K2 + c_a_eff))                # (x=1,h=+1)
-        Z_ai = z0 + z1 + z2 + z3
-    
-        e_ij = -w_ai - h_ai + (1. / l) * torch.log(Z_ai + 1e-9)           # −log P(x_j,h_a|rest)/λ
+            F = F + self.vbias                                              
+        
+        xF  = torch.einsum("mi,mi->mi", x, F)                               
+        Z_i = 2*torch.cosh(l * F)                                       
+        e_i = -xF + (1.0 / l) * torch.log(Z_i + 1e-9)                    
+
+        return e_i.mean()   
+
+    def compute_loss_PL2(self, data, l, use_fields, use_hfield):
+        x = data
+        with torch.no_grad():
+            if use_fields == True and use_hfield ==True:   
+                h = torch.tanh(l*(self.hbias+torch.einsum("ia,mi->ma", self.K2, x)))
+            else:
+                h = torch.tanh(l*(torch.einsum("ia,mi->ma", self.K2, x)))
+        b = torch.einsum("ja,ma->mj",self.K2, h)
+        c = torch.einsum("ja,mj->ma",self.K2, x)
+        
+        if use_fields == True:
+            b = b+self.vbias
+            if use_hfield==True:
+                c = c+self.hbias
+            
+        j_term = torch.einsum("ja,ma->mja", self.K2, h)
+        a_term = torch.einsum("ja,mj->mja", self.K2, x)
+
+        b_i_eff = b.unsqueeze(2)-j_term   #[M,N,1]
+        c_a_eff = c.unsqueeze(1)-a_term    #[M,1,N]
+        
+        w_ai = torch.einsum("ma,ja,mj->mja", h, self.K2, x)
+        h_ai = b_i_eff*x.unsqueeze(2)+c_a_eff*h.unsqueeze(1)
+        Z_ai = 2.*(torch.exp(l*self.K2)*torch.cosh(l*b_i_eff+l*c_a_eff)+torch.exp(-l*self.K2)*torch.cosh(l*b_i_eff-l*c_a_eff))
+
+        e_ij = -w_ai-h_ai+1./l*torch.log(Z_ai+1e-9)
         return e_ij.mean()
+
+    def normalize_w(self):
+        with torch.no_grad():
+            norm = torch.norm(self.weight_matrix.data)
+            self.weight_matrix.data = self.weight_matrix.data * self.w_norm_0 / (norm+1e-9)
+            
+    def normalize_K2(self):
+        with torch.no_grad():
+            norm = torch.norm(self.K2.data)
+            self.K2.data = self.K2.data * self.K2_norm_0 / (norm+1e-9)
+            
+    def normalize_v(self):
+        with torch.no_grad():
+            norm = torch.norm(self.vbias.data)
+            self.vbias.data = self.vbias.data * self.v_norm_0 / (norm+1e-9)

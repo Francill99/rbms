@@ -3,23 +3,27 @@ from typing import Optional, Tuple
 import torch
 from torch import Tensor
 from torch.nn.functional import softmax
+from rbms.custom_fn import log2cosh
 
 
 @torch.jit.script
 def _sample_hiddens(
     v: Tensor, weight_matrix: Tensor, hbias: Tensor, beta: float = 1.0
 ) -> Tuple[Tensor, Tensor]:
-    mh = torch.sigmoid(beta * (hbias + (v @ weight_matrix)))
-    h = torch.bernoulli(mh)
+    tmp = beta * (hbias + (v @ weight_matrix))
+    # mh = torch.exp(tmp) / (2 * torch.cosh(tmp)) 
+    mh = torch.tanh(tmp)                           # Because of Ising
+    h = torch.bernoulli(0.5 * (mh+ 1)) * 2 - 1
     return h, mh
 
 
-@torch.jit.script
+# @torch.jit.script
 def _sample_visibles(
     h: Tensor, weight_matrix: Tensor, vbias: Tensor, beta: float = 1.0
 ) -> Tuple[Tensor, Tensor]:
-    mv = torch.sigmoid(beta * (vbias + (h @ weight_matrix.T)))
-    v = torch.bernoulli(mv)
+    tmp = beta * (vbias + (h @ weight_matrix.T))
+    mv = torch.tanh(tmp)                           # Because of Ising
+    v = torch.bernoulli(0.5 * ( mv+ 1)) * 2 - 1
     return v, mv
 
 
@@ -47,7 +51,11 @@ def _compute_energy_visibles(
 ) -> Tensor:
     field = v @ vbias
     exponent = hbias + (v @ weight_matrix)
-    log_term = torch.where(exponent < 10, torch.log(1.0 + torch.exp(exponent)), exponent)
+
+    log_term = log2cosh(exponent)
+    # log_term = torch.where(
+    #     exponent < 10, torch.log(1.0 + torch.exp(exponent)), exponent
+    # )
     return -field - log_term.sum(1)
 
 
@@ -57,7 +65,11 @@ def _compute_energy_hiddens(
 ) -> Tensor:
     field = h @ hbias
     exponent = vbias + (h @ weight_matrix.T)
-    log_term = torch.where(exponent < 10, torch.log(1.0 + torch.exp(exponent)), exponent)
+    # log_term = torch.where(
+    #     exponent < 10, torch.log(1.0 + torch.exp(exponent)), exponent
+    # )
+    log_term = log2cosh(exponent)
+
     return -field - log_term.sum(1)
 
 
@@ -82,10 +94,10 @@ def _compute_gradient(
 
     # Averages over data and generated samples
     v_data_mean = (v_data * w_data).sum(0) / w_data_norm
-    torch.clamp_(v_data_mean, min=1e-7, max=(1.0 - 1e-7))
+    torch.clamp_(v_data_mean, min=-1+1e-7, max=(1.0 - 1e-7))
     h_data_mean = (mh_data * w_data).sum(0) / w_data_norm
     v_gen_mean = (v_chain * chain_weights).sum(0)
-    torch.clamp_(v_gen_mean, min=1e-7, max=(1.0 - 1e-7))
+    torch.clamp_(v_gen_mean, min=-1+1e-7, max=(1.0 - 1e-7))
     h_gen_mean = (h_chain * chain_weights).sum(0)
 
     if centered:
@@ -109,8 +121,9 @@ def _compute_gradient(
 
         # Gradient
         grad_weight_matrix = ((v_data * w_data).T @ mh_data) / w_data_norm - (
-            (v_chain * chain_weights).T @ h_chain
+            (v_chain * chain_weights).T @ h_chain 
         )
+        # grad_weight_matrix = (v_data.T @ mh_data) / v_data.shape[0] - (v_chain.T @ h_chain ) / v_chain.shape[0]
         grad_vbias = v_data_mean - v_gen_mean
         grad_hbias = h_data_mean - h_gen_mean
 
@@ -140,8 +153,10 @@ def _init_chains(
 
     if start_v is None:
         # Dummy mean visible
-        mv = torch.ones(size=(num_samples, num_visibles), device=device, dtype=dtype) / 2
-        v = torch.bernoulli(mv)
+        mv = (
+            torch.ones(size=(num_samples, num_visibles), device=device, dtype=dtype) / 2
+        )
+        v = torch.bernoulli(mv) * 2 - 1
     else:
         # Dummy mean visible
         mv = torch.ones_like(start_v, device=device, dtype=dtype) / 2
@@ -167,10 +182,16 @@ def _init_parameters(
         torch.randn(size=(num_visibles, num_hiddens), device=device, dtype=dtype)
         * var_init
     )
-    frequencies = data.mean(0)
+    spin_means = data.mean(0)
+    spin_means = torch.clamp(spin_means,-0.95,0.95)
+    '''
     frequencies = torch.clamp(frequencies, min=eps, max=(1.0 - eps))
-    vbias = 1/beta*(torch.log(frequencies) - torch.log(1.0 - frequencies)).to(
+    
+    vbias = (torch.log(frequencies) - torch.log(1.0 - frequencies)).to(
         device=device, dtype=dtype
     )
+    '''
+    vbias = 1/beta*torch.atanh(spin_means)
+    
     hbias = torch.zeros(num_hiddens, device=device, dtype=dtype)
     return vbias, hbias, weight_matrix

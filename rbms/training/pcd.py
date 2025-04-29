@@ -5,6 +5,8 @@ import numpy as np
 import torch
 from torch import Tensor
 from torch.optim import SGD
+from torch.utils.data import Subset
+import copy
 
 from rbms.classes import RBM
 from rbms.dataset.dataset_class import RBMDataset
@@ -23,6 +25,7 @@ def fit_batch_pcd(
     params: RBM,
     gibbs_steps: int,
     beta: float,
+    use_fields: bool=False,
     centered: bool = True,
 ) -> Tuple[dict[str, Tensor], dict]:
     """Sample the RBM and compute the gradient.
@@ -51,7 +54,7 @@ def fit_batch_pcd(
         params=params,
         beta=beta,
     )
-    params.compute_gradient(data=curr_batch, chains=parallel_chains, centered=centered)
+    params.compute_gradient(data=curr_batch, chains=parallel_chains, centered=centered, use_fields=use_fields)
     logs = {}
     return parallel_chains, logs
 
@@ -78,6 +81,11 @@ def train(
     filename = args["filename"]
     if not (args["overwrite"]):
         check_file_existence(filename)
+        
+    if args["gibbs_steps_init"]:   #MODIFICATION DONE DUE TO BM SLOW DYNAMICS
+        gibbs_steps_init = args["gibbs_steps_init"]
+    else:
+        gibbs_steps_init = 1000
 
     num_visibles = dataset.get_num_visibles()
 
@@ -88,6 +96,8 @@ def train(
             dataset=dataset,
             device=args["device"],
             dtype=dtype,
+            beta=args["beta"],
+            use_fields=args["use_fields"]
         )
         create_machine(
             filename=filename,
@@ -100,8 +110,8 @@ def train(
             learning_rate=args["learning_rate"],
             log=args["log"],
             flags=["checkpoint"],
+            gibbs_steps_init=gibbs_steps_init
         )
-
     (
         params,
         parallel_chains,
@@ -113,7 +123,8 @@ def train(
         log_filename,
         pbar,
     ) = setup_training(args, map_model=map_model)
-
+    
+    
     optimizer = SGD(params.parameters(), lr=learning_rate, maximize=True)
 
     for k, v in args.items():
@@ -125,6 +136,10 @@ def train(
             rand_idx = torch.randperm(len(dataset))[: args["batch_size"]]
             batch = (dataset.data[rand_idx], dataset.weights[rand_idx])
 
+            if (args["verbose"]==True) and (idx%10 == 1):
+                print("Update: ", idx,  "lr:", args["learning_rate"], "J_norm:", torch.norm(params.weight_matrix).item(), "v_norm:", torch.norm(params.vbias).item(), "h_norm:", torch.norm(params.hbias).item())
+        
+
             optimizer.zero_grad(set_to_none=False)
             parallel_chains, logs = fit_batch_pcd(
                 batch=batch,
@@ -132,6 +147,7 @@ def train(
                 params=params,
                 gibbs_steps=args["gibbs_steps"],
                 beta=args["beta"],
+                use_fields=args["use_fields"]
             )
             optimizer.step()
             if isinstance(params, PBRBM):
