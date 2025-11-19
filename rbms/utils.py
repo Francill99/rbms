@@ -279,7 +279,7 @@ def compute_log_likelihood(
     return -(params.compute_energy_visibles(v=v_data) @ w_normalized).item() - log_z
 
 
-@torch.jit.script
+# Disabled TorchScript because of Python 3.9 typing incompatibilities
 def swap_chains(
     chain_1: dict[str, Tensor], chain_2: dict[str, Tensor], idx: Tensor
 ) -> Tuple[dict[str, Tensor], dict[str, Tensor]]:

@@ -1,4 +1,8 @@
-from typing import List, Optional, Self
+from typing import List, Optional, TypeVar
+
+# Backward-compatible replacement for typing.Self (Python < 3.11)
+Self = TypeVar("Self", bound="RBM")
+
 
 import numpy as np
 import torch

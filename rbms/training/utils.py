@@ -157,19 +157,20 @@ def get_checkpoints(num_updates: int, n_save: int, spacing: str = "exp") -> np.n
     Returns:
         np.ndarray: Array of checkpoint indices.
     """
-    match spacing:
-        case "exp":
-            checkpoints = []
-            xi = num_updates
-            for _ in range(n_save):
-                checkpoints.append(xi)
-                xi = xi / num_updates ** (1 / n_save)
-            checkpoints = np.unique(np.array(checkpoints, dtype=np.int32))
-        case "linear":
-            checkpoints = np.linspace(1, num_updates, n_save).astype(np.int32)
-        case _:
-            raise ValueError(
-                f"spacing should be one of ('exp', 'linear'), got {spacing}"
-            )
+    if spacing == "exp":
+        checkpoints = []
+        xi = num_updates
+        for _ in range(n_save):
+            checkpoints.append(xi)
+            xi = xi / num_updates ** (1 / n_save)
+        checkpoints = np.unique(np.array(checkpoints, dtype=np.int32))
+
+    elif spacing == "linear":
+        checkpoints = np.linspace(1, num_updates, n_save).astype(np.int32)
+
+    else:
+        raise ValueError(
+            f"spacing should be one of ('exp', 'linear'), got {spacing}"
+        )
     checkpoints = np.unique(np.append(checkpoints, num_updates))
     return checkpoints

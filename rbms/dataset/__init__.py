@@ -31,28 +31,31 @@ def load_dataset(
 
     dataset_name = Path(dataset_name)
 
-    match dataset_name.suffix:
-        case ".h5":
-            data, labels = load_HDF5(filename=dataset_name, binarize=binarize)
-        case ".fasta":
-            data, weights, names = load_FASTA(
-                filename=dataset_name,
-                binarize=binarize,
-                use_weights=use_weights,
-                alphabet=alphabet,
-                device=device,
-            )
-            if not binarize:
-                is_binary = False
-        case _:
-            raise ValueError(
-                """
-            Dataset could not be loaded as the type is not recognized.
-            It should be either:
-                - '.h5',
+    suffix = dataset_name.suffix
+
+    if suffix == ".h5":
+        data, labels = load_HDF5(filename=dataset_name, binarize=binarize)
+    
+    elif suffix == ".fasta":
+        data, weights, names = load_FASTA(
+            filename=dataset_name,
+            binarize=binarize,
+            use_weights=use_weights,
+            alphabet=alphabet,
+            device=device,
+        )
+        if not binarize:
+            is_binary = False
+    
+    else:
+        raise ValueError(
+            """
+            Dataset type not recognized.
+            Supported extensions:
+                - '.h5'
                 - '.fasta'
             """
-            )
+        )
     # Select subset of dataset w.r.t. labels
     if subset_labels is not None and labels is not None:
         data, labels = get_subset_labels(data, labels, subset_labels)

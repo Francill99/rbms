@@ -6,8 +6,8 @@ import numpy as np
 
 
 def load_HDF5(
-    filename: str | Path, binarize: bool = True
-) -> Tuple[np.ndarray, np.ndarray | None]:
+    filename: str , binarize: bool = True
+) -> Tuple[np.ndarray, np.ndarray ]:
     """Load a dataset from an HDF5 file.
 
     Args:

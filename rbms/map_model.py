@@ -1,6 +1,6 @@
 from rbms.bernoulli_bernoulli.classes import BBRBM
 from rbms.ising.ising_rbm import IsingRBM
-from rbms.classes import RBM
+from rbms.classes import RBM, EBM
 from rbms.potts_bernoulli.classes import PBRBM
 from rbms.bernoulli_gaussian.classes import BGRBM
 

@@ -17,6 +17,7 @@ from rbms.potts_bernoulli.utils import ensure_zero_sum_gauge
 from rbms.sampling.gibbs import sample_state
 from rbms.training.utils import create_machine, setup_training
 from rbms.utils import check_file_existence, log_to_csv
+from tqdm import tqdm
 
 
 def fit_batch_pcd(
@@ -54,7 +55,8 @@ def fit_batch_pcd(
         params=params,
         beta=beta,
     )
-    params.compute_gradient(data=curr_batch, chains=parallel_chains, centered=centered, use_fields=use_fields)
+    #params.compute_gradient(data=curr_batch, chains=parallel_chains, centered=centered, use_fields=use_fields)
+    params.compute_gradient(data=curr_batch, chains=parallel_chains, centered=centered)
     logs = {}
     return parallel_chains, logs
 
@@ -96,8 +98,8 @@ def train(
             dataset=dataset,
             device=args["device"],
             dtype=dtype,
-            beta=args["beta"],
-            use_fields=args["use_fields"]
+            #beta=args["beta"],
+            #use_fields=args["use_fields"]
         )
         create_machine(
             filename=filename,
@@ -130,14 +132,18 @@ def train(
     for k, v in args.items():
         print(f"{k} : {v}")
 
+        
+    pbar = tqdm(total=100)                  # progress in percent
+    next_update = 1                         # next percent to print
+
     # Continue the training
     with torch.no_grad():
         for idx in range(num_updates + 1, args["num_updates"] + 1):
             rand_idx = torch.randperm(len(dataset))[: args["batch_size"]]
             batch = (dataset.data[rand_idx], dataset.weights[rand_idx])
 
-            if (args["verbose"]==True) and (idx%10 == 1):
-                print("Update: ", idx,  "lr:", args["learning_rate"], "J_norm:", torch.norm(params.weight_matrix).item(), "v_norm:", torch.norm(params.vbias).item(), "h_norm:", torch.norm(params.hbias).item())
+            #if (args["verbose"]==True) and (idx%10 == 1):
+            #    print("Update: ", idx,  "lr:", args["learning_rate"], "J_norm:", torch.norm(params.weight_matrix).item(), "v_norm:", torch.norm(params.vbias).item(), "h_norm:", torch.norm(params.hbias).item())
         
 
             optimizer.zero_grad(set_to_none=False)
@@ -168,5 +174,8 @@ def train(
             if args["log"]:
                 log_to_csv(logs, log_file=log_filename)
 
-            # Update progress bar
-            pbar.update(1)
+            progress = (idx + 1) * 100.0 / (args["num_updates"] + 1)
+            if progress >= next_update:
+                pbar.update(1)                  # advance by 1%
+                next_update += 1
+
